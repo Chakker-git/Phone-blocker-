@@ -9,7 +9,7 @@ Personal Android blocker for apps and websites (incognito included), with a dela
 - Lock: `LockManager`. Turning protection on or adding to the lists is instant. Turning it off or removing anything is queued, waits `DELAY_MS` (currently 60 seconds, for testing), then must be confirmed within 10 minutes.
 - Device admin makes uninstalling a two-step chore. Boot receiver and the accessibility watchdog restart the VPN if it dies.
 
-Defaults: Reddit and Discord (apps and domains). Edit in the app.
+Defaults: Reddit and Discord (apps and domains). Pick apps from a searchable list of installed apps ("Choose apps"); edit blocked sites as plain text. Removals from either list go through the delay.
 
 ## Build and install
 

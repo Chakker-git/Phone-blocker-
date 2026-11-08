@@ -50,7 +50,14 @@ object Config {
     }
 
     fun packages(ctx: Context): List<String> =
-        parse(prefs(ctx).getString(K_PACKAGES, null) ?: DEFAULT_PACKAGES.joinToString("\n"))
+        parsePackages(prefs(ctx).getString(K_PACKAGES, null) ?: DEFAULT_PACKAGES.joinToString("\n"))
+
+    /** Package names are case-sensitive, so unlike domains they are not lowercased. */
+    fun parsePackages(text: String): List<String> =
+        text.split(Regex("[,\\s]+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
 
     fun userDomains(ctx: Context): List<String> =
         parseDomains(prefs(ctx).getString(K_DOMAINS, null) ?: DEFAULT_DOMAINS.joinToString("\n"))

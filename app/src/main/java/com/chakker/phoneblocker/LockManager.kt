@@ -10,7 +10,7 @@ import android.content.Context
  * queued, must sit for DELAY_MS, and then have to be explicitly confirmed within WINDOW_MS.
  */
 object LockManager {
-    /** 1 minute for testing. Raise this (e.g. 24h) once the thing works. */
+    /** 1 minute for testing. Raise this (e.g. 1h or 24h) once the thing works. */
     const val DELAY_MS = 60_000L
 
     /** How long after becoming confirmable the request stays valid before it lapses. */
@@ -43,7 +43,7 @@ object LockManager {
         val pending = Pending(
             type = type,
             since = p.getLong(P_SINCE, 0L),
-            packages = Config.parse(p.getString(P_PACKAGES, "") ?: ""),
+            packages = Config.parsePackages(p.getString(P_PACKAGES, "") ?: ""),
             domains = Config.parseDomains(p.getString(P_DOMAINS, "") ?: ""),
         )
         if (System.currentTimeMillis() > pending.expiresAt()) {
@@ -59,6 +59,18 @@ object LockManager {
             .apply()
     }
 
+    /** The app list as the user last set it: the queued version if one is waiting, else the active one. */
+    fun effectivePackages(ctx: Context): List<String> {
+        val p = pending(ctx)
+        return if (p != null && p.type == TYPE_CONFIG) p.packages else Config.packages(ctx)
+    }
+
+    /** The domain list as the user last set it: the queued version if one is waiting, else the active one. */
+    fun effectiveDomains(ctx: Context): List<String> {
+        val p = pending(ctx)
+        return if (p != null && p.type == TYPE_CONFIG) p.domains else Config.userDomains(ctx)
+    }
+
     fun requestDisable(ctx: Context) {
         if (!Config.isEnabled(ctx)) return
         val existing = pending(ctx)
@@ -71,11 +83,17 @@ object LockManager {
         val curD = Config.userDomains(ctx).toSet()
         val newP = packages.toSet()
         val newD = domains.toSet()
-        if (curP == newP && curD == newD) return RequestResult.NOOP
+
+        if (curP == newP && curD == newD) {
+            // Back to exactly what's active: any queued removal is moot.
+            if (pending(ctx)?.type == TYPE_CONFIG) cancel(ctx)
+            return RequestResult.NOOP
+        }
 
         val loosens = curP.any { it !in newP } || curD.any { it !in newD }
         if (!loosens || !Config.isEnabled(ctx)) {
             Config.setLists(ctx, packages, domains)
+            if (pending(ctx)?.type == TYPE_CONFIG) cancel(ctx)
             return RequestResult.APPLIED
         }
         queue(ctx, TYPE_CONFIG, packages, domains)
