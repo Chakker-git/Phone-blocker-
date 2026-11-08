@@ -91,7 +91,7 @@ class DnsVpnService : VpnService() {
     }
 
     private fun startTunnel() {
-        val pfd = VpnService.Builder()
+        val pfd = Builder()
             .setSession("PhoneBlocker")
             .setMtu(1500)
             .addAddress(TUN_ADDR, 32)
