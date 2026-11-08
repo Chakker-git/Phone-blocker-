@@ -11,7 +11,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 /**
  * Two jobs:
  *  1. App blocking: a blocked package in the foreground gets a Home press plus a block screen.
- *  2. Uninstall guard: Settings, uninstall and VPN-manage screens that mention this app get the
+ *  2. Uninstall guard: Settings, uninstall and VPN-manage screens that are about this app get the
  *     same treatment, unless an uninstall unlock (or the short setup grace) is open.
  *
  * It also acts as a watchdog that restarts the DNS VPN if it died.
@@ -40,8 +40,8 @@ class AppBlockerService : AccessibilityService() {
             }
         }
 
-        if (isGuarded(pkg) && guardActive()) {
-            val cls = event.className?.toString() ?: ""
+        val cls = event.className?.toString() ?: ""
+        if (isGuarded(pkg) && guardActive() && !isSettingsHome(cls)) {
             checkGuard(cls)
             // Screen content often fills in after the window event, so look again shortly after.
             handler.postDelayed({ checkGuard(cls) }, 400)
@@ -57,37 +57,51 @@ class AppBlockerService : AccessibilityService() {
             pkg.contains("packageinstaller") ||
             pkg.contains("vpndialogs")
 
+    /**
+     * The top-level Settings screen only links to other pages, and it can show the app name in a
+     * summary ("Recently sent: ...") without being a page that can change anything. Never guard it.
+     */
+    private fun isSettingsHome(cls: String): Boolean =
+        cls.contains("Homepage", ignoreCase = true) || cls.endsWith(".Settings")
+
     private fun checkGuard(eventClass: String) {
         if (!guardActive()) return
         val root = rootInActiveWindow ?: return
         val pkg = root.packageName?.toString() ?: return
         if (!isGuarded(pkg)) return
 
-        val hit = if (pkg.contains("vpndialogs")) {
+        val hit = when {
             // Only the "manage / disconnect" dialog, not the one that asks permission to start the VPN.
-            eventClass.contains("ManageDialog") && mentionsApp(root)
-        } else {
-            mentionsApp(root)
+            pkg.contains("vpndialogs") ->
+                eventClass.contains("ManageDialog") && scan(root, 0, IntArray(1), exact = false)
+            // The uninstall dialog is only ever about one app, so a mention is enough.
+            pkg.contains("packageinstaller") -> scan(root, 0, IntArray(1), exact = false)
+            // Settings: only a row or title that is exactly the app name, not a summary that mentions it.
+            else -> scan(root, 0, IntArray(1), exact = true)
         }
         if (hit) {
             block("Locked.", "Request an uninstall unlock in Phone Blocker to change or remove it.")
         }
     }
 
-    private fun mentionsApp(root: AccessibilityNodeInfo): Boolean = scan(root, 0, IntArray(1))
+    private fun matches(s: CharSequence?, exact: Boolean): Boolean {
+        if (s == null) return false
+        return if (exact) {
+            s.toString().trim().equals(appLabel, ignoreCase = true)
+        } else {
+            s.contains(appLabel, ignoreCase = true)
+        }
+    }
 
-    private fun scan(node: AccessibilityNodeInfo?, depth: Int, budget: IntArray): Boolean {
+    private fun scan(node: AccessibilityNodeInfo?, depth: Int, budget: IntArray, exact: Boolean): Boolean {
         if (node == null || depth > 30) return false
         budget[0]++
         if (budget[0] > 600) return false
 
-        val text = node.text
-        if (text != null && text.contains(appLabel, ignoreCase = true)) return true
-        val desc = node.contentDescription
-        if (desc != null && desc.contains(appLabel, ignoreCase = true)) return true
+        if (matches(node.text, exact) || matches(node.contentDescription, exact)) return true
 
         for (i in 0 until node.childCount) {
-            if (scan(node.getChild(i), depth + 1, budget)) return true
+            if (scan(node.getChild(i), depth + 1, budget, exact)) return true
         }
         return false
     }
