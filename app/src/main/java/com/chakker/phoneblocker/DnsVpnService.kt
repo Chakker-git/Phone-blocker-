@@ -40,11 +40,17 @@ class DnsVpnService : VpnService() {
         var running = false
             private set
 
+        @Volatile
+        private var instance: DnsVpnService? = null
+
         /** Make the service state match the saved on/off flag. */
         fun sync(ctx: Context) {
             if (Config.isEnabled(ctx)) {
                 ensureRunning(ctx)
             } else {
+                // stopService alone isn't enough: the system keeps a VpnService bound while its
+                // tunnel is open, so the tunnel has to be closed from inside.
+                instance?.shutdown()
                 ctx.stopService(Intent(ctx, DnsVpnService::class.java))
             }
         }
@@ -63,10 +69,28 @@ class DnsVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private val pool: ExecutorService = Executors.newCachedThreadPool()
 
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
+    /** Close the tunnel and stop, so the VPN key icon and DNS filtering go away. */
+    fun shutdown() {
+        running = false
+        try {
+            tun?.close()
+        } catch (e: IOException) {
+            // already closed
+        }
+        tun = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         showForeground()
         if (!Config.isEnabled(this)) {
-            stopSelf()
+            shutdown()
             return START_NOT_STICKY
         }
         if (tun == null) startTunnel()
@@ -140,7 +164,7 @@ class DnsVpnService : VpnService() {
             val query = p.copyOfRange(dnsOff, dnsOff + dnsLen)
 
             val q = parseQuestion(query)
-            val reply: ByteArray = if (q != null && isBlocked(q.first)) {
+            val reply: ByteArray = if (q != null && Config.isEnabled(this) && isBlocked(q.first)) {
                 nxdomain(query, q.second)
             } else {
                 forward(query) ?: return
@@ -254,6 +278,7 @@ class DnsVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         running = false
         try {
             tun?.close()

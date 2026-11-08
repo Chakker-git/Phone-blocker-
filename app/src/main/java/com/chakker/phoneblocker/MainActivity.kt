@@ -170,7 +170,7 @@ class MainActivity : Activity() {
         super.onResume()
         // Device admin is on: the setup grace has done its job, close it.
         if (isAdminOn() && Config.graceUntil(this) > 0L) Config.setGraceUntil(this, 0L)
-        DnsVpnService.ensureRunning(this)
+        DnsVpnService.sync(this) // also tears down a tunnel left over while protection is off
         handler.post(ticker)
     }
 
