@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -21,10 +22,6 @@ class AppBlockerService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastBlockAt = 0L
     private var appLabel = "Phone Blocker"
-
-    // Labels of the other installed apps, used to tell "a list of apps" from "this app's own page".
-    private var otherLabels: Set<String> = emptySet()
-    private var otherLabelsAt = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -75,7 +72,8 @@ class AppBlockerService : AccessibilityService() {
         if (!isGuarded(pkg)) return
 
         val texts = ArrayList<String>()
-        collectTexts(root, 0, IntArray(1), texts)
+        val titleHit = BooleanArray(1)
+        collectTexts(root, 0, IntArray(1), texts, false, titleHit)
 
         val hit = when {
             // Only the "manage / disconnect" dialog, not the one that asks permission to start the VPN.
@@ -83,7 +81,7 @@ class AppBlockerService : AccessibilityService() {
                 eventClass.contains("ManageDialog") && texts.any { mentions(it) }
             // The uninstall dialog is only ever about one app, so a mention is enough.
             pkg.contains("packageinstaller") -> texts.any { mentions(it) }
-            else -> isOwnSettingsPage(texts)
+            else -> titleHit[0]
         }
         if (hit) {
             block("Locked.", "Request an uninstall unlock in Phone Blocker to change or remove it.")
@@ -93,46 +91,46 @@ class AppBlockerService : AccessibilityService() {
     private fun mentions(s: String): Boolean = s.contains(appLabel, ignoreCase = true)
 
     /**
-     * A Settings page counts as "about this app" when the app name shows up as a row or title
-     * on its own, and the screen is not a long list of other apps (Apps, notification app list...).
-     * Tapping the app's row in such a list opens its own page, which passes this test and is guarded.
+     * Walks the window. [titleHit] is set when the app name appears exactly, as a title or header:
+     * either a node outside any scrolling list (toolbar, page title), or one whose view id says
+     * it is a title/header (App info's header sits inside the list). A name that is only a row in
+     * a scrolling list (Apps, VPN list under Network) does not count.
      */
-    private fun isOwnSettingsPage(texts: List<String>): Boolean {
-        if (texts.none { it.trim().equals(appLabel, ignoreCase = true) }) return false
-        val others = otherAppLabels()
-        val otherRows = texts.map { it.trim().lowercase() }.filter { it in others }.toSet().size
-        return otherRows < 3
-    }
-
-    private fun otherAppLabels(): Set<String> {
-        val now = SystemClock.elapsedRealtime()
-        if (otherLabels.isNotEmpty() && now - otherLabelsAt < 10 * 60_000L) return otherLabels
-        val pm = packageManager
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        otherLabels = pm.queryIntentActivities(launcher, 0)
-            .filter { it.activityInfo.packageName != packageName }
-            .map { it.loadLabel(pm).toString().trim().lowercase() }
-            .filter { it.length >= 3 }
-            .toSet()
-        otherLabelsAt = now
-        return otherLabels
-    }
-
     private fun collectTexts(
         node: AccessibilityNodeInfo?,
         depth: Int,
         budget: IntArray,
-        out: MutableList<String>
+        out: MutableList<String>,
+        inList: Boolean,
+        titleHit: BooleanArray
     ) {
         if (node == null || depth > 30) return
         budget[0]++
         if (budget[0] > 800) return
 
-        node.text?.let { out.add(it.toString()) }
-        node.contentDescription?.let { out.add(it.toString()) }
+        val t = node.text?.toString()
+        val d = node.contentDescription?.toString()
+        t?.let { out.add(it) }
+        d?.let { out.add(it) }
 
+        val id = node.viewIdResourceName ?: ""
+        val exact = (t != null && t.trim().equals(appLabel, true)) ||
+            (d != null && d.trim().equals(appLabel, true))
+        if (exact) {
+            Log.d("PhoneBlocker", "label node id=$id cls=${node.className} inList=$inList")
+            // Rows in a list also have ids ending in "title" (android:id/title), so a title id only
+            // counts for the known header ids, not for any row.
+            val headerId = id.contains("entity_header", true) || id.contains("action_bar", true) ||
+                id.contains("toolbar", true) || id.contains("collapsing", true)
+            if (headerId || !inList) titleHit[0] = true
+        }
+
+        val scrolls = inList || node.isScrollable ||
+            (node.className?.toString()?.let {
+                it.contains("RecyclerView") || it.contains("ListView") || it.contains("ScrollView")
+            } ?: false)
         for (i in 0 until node.childCount) {
-            collectTexts(node.getChild(i), depth + 1, budget, out)
+            collectTexts(node.getChild(i), depth + 1, budget, out, scrolls, titleHit)
         }
     }
 
