@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Phone Blocker</string>
-    <string name="accessibility_description">Detects when a blocked app comes to the foreground and kicks you back to the home screen. Does not read screen content.</string>
+    <string name="accessibility_description">Detects when a blocked app comes to the foreground and sends you home. Also reads Settings, uninstall and VPN screens so the blocker cannot be removed or switched off without an unlock request. Nothing is stored or sent anywhere.</string>
 </resources>

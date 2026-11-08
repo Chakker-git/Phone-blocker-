@@ -49,6 +49,39 @@ object Config {
         prefs(ctx).edit().putBoolean(K_ENABLED, enabled).apply()
     }
 
+    private const val K_DELAY_MS = "delay_ms"
+    private const val K_UNLOCK_MS = "unlock_ms"
+    private const val K_UNLOCK_UNTIL = "unlock_until"
+    private const val K_GRACE_UNTIL = "grace_until"
+
+    /** How long a loosening request has to wait before it can be confirmed. Default 1 minute (testing). */
+    fun delayMs(ctx: Context): Long = prefs(ctx).getLong(K_DELAY_MS, 60_000L)
+
+    fun setDelayMs(ctx: Context, ms: Long) {
+        prefs(ctx).edit().putLong(K_DELAY_MS, ms).apply()
+    }
+
+    /** How long uninstall stays unlocked after an approved request. Default 10 minutes. */
+    fun unlockMs(ctx: Context): Long = prefs(ctx).getLong(K_UNLOCK_MS, 10 * 60_000L)
+
+    fun setUnlockMs(ctx: Context, ms: Long) {
+        prefs(ctx).edit().putLong(K_UNLOCK_MS, ms).apply()
+    }
+
+    /** Wall-clock time until which the uninstall guard is open. 0 = locked. */
+    fun unlockUntil(ctx: Context): Long = prefs(ctx).getLong(K_UNLOCK_UNTIL, 0L)
+
+    fun setUnlockUntil(ctx: Context, ms: Long) {
+        prefs(ctx).edit().putLong(K_UNLOCK_UNTIL, ms).apply()
+    }
+
+    /** Short setup grace so device admin can be activated while the guard is running. */
+    fun graceUntil(ctx: Context): Long = prefs(ctx).getLong(K_GRACE_UNTIL, 0L)
+
+    fun setGraceUntil(ctx: Context, ms: Long) {
+        prefs(ctx).edit().putLong(K_GRACE_UNTIL, ms).apply()
+    }
+
     fun packages(ctx: Context): List<String> =
         parsePackages(prefs(ctx).getString(K_PACKAGES, null) ?: DEFAULT_PACKAGES.joinToString("\n"))
 

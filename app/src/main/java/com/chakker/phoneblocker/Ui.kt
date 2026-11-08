@@ -27,6 +27,21 @@ object Ui {
 
     fun dp(ctx: Context, v: Int): Int = (v * ctx.resources.displayMetrics.density).toInt()
 
+    /** "45s", "5m 30s", "2h 10m", "1d 6h". Rounds up so countdowns never show 0 early. */
+    fun duration(ms: Long): String {
+        val s = (maxOf(ms, 0L) + 999) / 1000
+        val d = s / 86400
+        val h = (s % 86400) / 3600
+        val m = (s % 3600) / 60
+        val sec = s % 60
+        return when {
+            d > 0 -> if (h > 0) "${d}d ${h}h" else "${d}d"
+            h > 0 -> if (m > 0) "${h}h ${m}m" else "${h}h"
+            m > 0 -> if (sec > 0 && m < 10) "${m}m ${sec}s" else "${m}m"
+            else -> "${sec}s"
+        }
+    }
+
     fun rounded(ctx: Context, fill: Int, radiusDp: Int): GradientDrawable {
         val d = GradientDrawable()
         d.setColor(fill)

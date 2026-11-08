@@ -1,6 +1,7 @@
 package com.chakker.phoneblocker
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
@@ -11,6 +12,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -25,6 +27,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_VPN = 1
         private const val REQ_PICK = 2
+        private const val SETUP_GRACE_MS = 2 * 60_000L
     }
 
     private lateinit var stateText: TextView
@@ -33,13 +36,20 @@ class MainActivity : Activity() {
     private lateinit var a11yValue: TextView
     private lateinit var adminValue: TextView
     private lateinit var toggle: Button
-    private lateinit var pendingCard: LinearLayout
-    private lateinit var pendingText: TextView
+    private lateinit var pendingBox: LinearLayout
+    private lateinit var unlockState: TextView
+    private lateinit var unlockSub: TextView
+    private lateinit var unlockBtn: Button
+    private lateinit var delayValue: TextView
+    private lateinit var windowValue: TextView
     private lateinit var appsBox: LinearLayout
     private lateinit var domEdit: EditText
 
     private var appsKey: String? = null
     private var lastOn: Boolean? = null
+    private var lastUnlocked: Boolean? = null
+    private var pendingKey: String? = null
+    private val pendingTexts = mutableMapOf<String, TextView>()
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -75,36 +85,17 @@ class MainActivity : Activity() {
         toggle = Ui.button(this, "", Ui.Style.PRIMARY) { onToggle() }
         root.addView(toggle, Ui.lp(this, 14))
 
-        // Pending change card (hidden unless a delayed change is queued)
-        pendingCard = Ui.card(this)
-        pendingText = Ui.text(this, "", 14f, Ui.TEXT)
-        pendingCard.addView(pendingText)
-        val pendingRow = LinearLayout(this)
-        pendingRow.orientation = LinearLayout.HORIZONTAL
-        pendingRow.addView(
-            Ui.button(this, "Confirm", Ui.Style.PRIMARY) { onConfirm() },
-            Ui.lpWeight(this, 0, 6)
-        )
-        pendingRow.addView(
-            Ui.button(this, "Cancel", Ui.Style.SECONDARY) {
-                LockManager.cancel(this)
-                reloadFields()
-                toast("Cancelled.")
-                refresh()
-            },
-            Ui.lpWeight(this, 6, 0)
-        )
-        pendingCard.addView(pendingRow, Ui.lp(this, 12))
-        pendingCard.visibility = View.GONE
-        root.addView(pendingCard, Ui.lp(this, 12))
+        // Queued requests (one card each, hidden when empty)
+        pendingBox = LinearLayout(this)
+        pendingBox.orientation = LinearLayout.VERTICAL
+        pendingBox.visibility = View.GONE
+        root.addView(pendingBox, Ui.lp(this, 12))
 
         // Setup shortcuts
         val setupRow = LinearLayout(this)
         setupRow.orientation = LinearLayout.HORIZONTAL
         setupRow.addView(
-            Ui.button(this, "Accessibility", Ui.Style.SECONDARY) {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            },
+            Ui.button(this, "Accessibility", Ui.Style.SECONDARY) { openAccessibility() },
             Ui.lpWeight(this, 0, 6)
         )
         setupRow.addView(
@@ -112,6 +103,28 @@ class MainActivity : Activity() {
             Ui.lpWeight(this, 6, 0)
         )
         root.addView(setupRow, Ui.lp(this, 12))
+
+        // Uninstall lock
+        root.addView(Ui.label(this, "Uninstall lock"), Ui.lp(this, 28))
+        val lockCard = Ui.card(this)
+        unlockState = Ui.text(this, "", 22f, Ui.TEXT, light = true)
+        unlockSub = Ui.text(this, "", 13f, Ui.MUTED)
+        lockCard.addView(unlockState)
+        lockCard.addView(unlockSub, Ui.lp(this, 2))
+        root.addView(lockCard, Ui.lp(this, 8))
+        unlockBtn = Ui.button(this, "", Ui.Style.SECONDARY) { onUnlockButton() }
+        root.addView(unlockBtn, Ui.lp(this, 8))
+
+        // Timing
+        root.addView(Ui.label(this, "Timing"), Ui.lp(this, 28))
+        val timingCard = Ui.card(this)
+        delayValue = addRow(timingCard, "Request delay", 0)
+        windowValue = addRow(timingCard, "Unlock window")
+        root.addView(timingCard, Ui.lp(this, 8))
+        root.addView(
+            Ui.button(this, "Change timing", Ui.Style.SECONDARY) { openTimingDialog() },
+            Ui.lp(this, 8)
+        )
 
         // Blocked apps
         root.addView(Ui.label(this, "Blocked apps"), Ui.lp(this, 28))
@@ -146,16 +159,6 @@ class MainActivity : Activity() {
             Ui.lp(this, 8)
         )
 
-        root.addView(
-            Ui.text(
-                this,
-                "Disable delay: ${LockManager.DELAY_MS / 1000}s (testing value)",
-                12f,
-                Ui.MUTED
-            ),
-            Ui.lp(this, 24)
-        )
-
         val scroll = ScrollView(this)
         scroll.setBackgroundColor(Ui.BG)
         scroll.addView(root)
@@ -165,6 +168,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Device admin is on: the setup grace has done its job, close it.
+        if (isAdminOn() && Config.graceUntil(this) > 0L) Config.setGraceUntil(this, 0L)
         DnsVpnService.ensureRunning(this)
         handler.post(ticker)
     }
@@ -192,7 +197,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun addRow(card: LinearLayout, label: String): TextView {
+    // ---- layout helpers ----
+
+    private fun addRow(card: LinearLayout, label: String, top: Int = 8): TextView {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
@@ -200,7 +207,7 @@ class MainActivity : Activity() {
         val v = Ui.text(this, "", 14f, Ui.TEXT)
         row.addView(l, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(v)
-        card.addView(row, Ui.lp(this, 8))
+        card.addView(row, Ui.lp(this, top))
         return v
     }
 
@@ -208,6 +215,8 @@ class MainActivity : Activity() {
         tv.text = text
         tv.setTextColor(if (ok) Ui.ACCENT else if (protectionOn) Ui.WARN else Ui.MUTED)
     }
+
+    // ---- actions ----
 
     private fun onToggle() {
         if (!Config.isEnabled(this)) {
@@ -220,7 +229,48 @@ class MainActivity : Activity() {
             }
         } else {
             LockManager.requestDisable(this)
-            toast("Disable queued. Confirmable in ${LockManager.DELAY_MS / 1000}s.")
+            toast("Disable queued. Ready in ${Ui.duration(Config.delayMs(this))}.")
+        }
+        refresh()
+    }
+
+    private fun openAccessibility() {
+        if (isAccessibilityOn()) {
+            toast("Already on. Changing it needs an uninstall unlock.")
+            return
+        }
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun requestAdmin() {
+        if (isAdminOn()) {
+            toast("Already active. Removing it needs an uninstall unlock.")
+            return
+        }
+        // The guard would otherwise bounce the activation screen, so give setup a short grace.
+        Config.setGraceUntil(this, System.currentTimeMillis() + SETUP_GRACE_MS)
+        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+        intent.putExtra(
+            DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+            ComponentName(this, BlockerDeviceAdmin::class.java)
+        )
+        intent.putExtra(
+            DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+            "Makes the blocker harder to uninstall on impulse."
+        )
+        startActivity(intent)
+    }
+
+    private fun onUnlockButton() {
+        if (LockManager.isUnlocked(this)) {
+            LockManager.lockNow(this)
+            toast("Locked again.")
+        } else {
+            when (LockManager.requestUninstallUnlock(this)) {
+                LockManager.RequestResult.QUEUED ->
+                    toast("Request queued. Ready in ${Ui.duration(Config.delayMs(this))}.")
+                else -> toast("Already requested.")
+            }
         }
         refresh()
     }
@@ -243,24 +293,28 @@ class MainActivity : Activity() {
         when (LockManager.requestConfig(this, packages, domains)) {
             LockManager.RequestResult.APPLIED -> toast("Saved.")
             LockManager.RequestResult.QUEUED ->
-                toast("Removal queued. Confirmable in ${LockManager.DELAY_MS / 1000}s.")
+                toast("Removal queued. Ready in ${Ui.duration(Config.delayMs(this))}.")
             LockManager.RequestResult.NOOP -> toast("No change.")
         }
         appsKey = null
         refresh()
     }
 
-    private fun onConfirm() {
-        val pending = LockManager.pending(this)
-        when (LockManager.confirm(this)) {
+    private fun onConfirm(type: String) {
+        val pending = LockManager.pending(this, type)
+        when (LockManager.confirm(this, type)) {
             LockManager.ConfirmResult.OK -> {
                 DnsVpnService.sync(this)
                 reloadFields()
-                toast("Applied.")
+                if (type == LockManager.TYPE_UNINSTALL) {
+                    toast("Uninstall unlocked for ${Ui.duration(pending?.newUnlockMs ?: 0L)}.")
+                } else {
+                    toast("Applied.")
+                }
             }
             LockManager.ConfirmResult.TOO_EARLY -> {
-                val left = ((pending?.readyAt() ?: 0L) - System.currentTimeMillis()) / 1000 + 1
-                toast("Not yet. ${left}s to go.")
+                val left = (pending?.readyAt() ?: 0L) - System.currentTimeMillis()
+                toast("Not yet. ${Ui.duration(left)} to go.")
             }
             LockManager.ConfirmResult.NONE -> toast("Nothing pending.")
         }
@@ -268,18 +322,74 @@ class MainActivity : Activity() {
         refresh()
     }
 
-    private fun requestAdmin() {
-        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-        intent.putExtra(
-            DevicePolicyManager.EXTRA_DEVICE_ADMIN,
-            ComponentName(this, BlockerDeviceAdmin::class.java)
-        )
-        intent.putExtra(
-            DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-            "Makes the blocker harder to uninstall on impulse."
-        )
-        startActivity(intent)
+    private fun onCancel(type: String) {
+        LockManager.cancel(this, type)
+        reloadFields()
+        toast("Cancelled.")
+        appsKey = null
+        refresh()
     }
+
+    // ---- timing dialog ----
+
+    private fun openTimingDialog() {
+        val pad = Ui.dp(this, 20)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(pad, pad / 2, pad, 0)
+
+        val delayEdit = minutesField(Config.delayMs(this))
+        val windowEdit = minutesField(Config.unlockMs(this))
+        box.addView(Ui.text(this, "Request delay (minutes)", 13f, Ui.MUTED))
+        box.addView(delayEdit)
+        box.addView(Ui.text(this, "Unlock window (minutes)", 13f, Ui.MUTED), Ui.lp(this, 12))
+        box.addView(windowEdit)
+        box.addView(
+            Ui.text(
+                this,
+                "60 = 1 hour, 1440 = 24 hours. A longer delay or shorter window applies at once. " +
+                    "A shorter delay or longer window has to wait out the current delay first.",
+                12f,
+                Ui.MUTED
+            ),
+            Ui.lp(this, 12)
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle("Timing")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                saveTiming(delayEdit.text.toString(), windowEdit.text.toString())
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun minutesField(ms: Long): EditText {
+        val e = EditText(this)
+        e.inputType = InputType.TYPE_CLASS_NUMBER
+        e.setText((ms / 60_000L).toString())
+        e.setTextColor(Ui.TEXT)
+        return e
+    }
+
+    private fun saveTiming(delayText: String, windowText: String) {
+        val d = delayText.trim().toLongOrNull()
+        val w = windowText.trim().toLongOrNull()
+        if (d == null || w == null || d !in 1L..10080L || w !in 1L..10080L) {
+            toast("Use 1 to 10080 minutes.")
+            return
+        }
+        when (LockManager.requestTiming(this, d * 60_000L, w * 60_000L)) {
+            LockManager.RequestResult.APPLIED -> toast("Saved.")
+            LockManager.RequestResult.QUEUED ->
+                toast("Change queued. Ready in ${Ui.duration(Config.delayMs(this))}.")
+            LockManager.RequestResult.NOOP -> toast("No change.")
+        }
+        refresh()
+    }
+
+    // ---- state ----
 
     private fun reloadFields() {
         domEdit.setText(LockManager.effectiveDomains(this).joinToString("\n"))
@@ -323,6 +433,54 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun describe(p: LockManager.Pending, now: Long): String {
+        val what = when (p.type) {
+            LockManager.TYPE_DISABLE -> "Turn protection off"
+            LockManager.TYPE_CONFIG -> "Remove items from the lists"
+            LockManager.TYPE_TIMING ->
+                "Change timing: delay ${Ui.duration(p.newDelayMs)}, window ${Ui.duration(p.newUnlockMs)}"
+            LockManager.TYPE_UNINSTALL -> "Unlock uninstall for ${Ui.duration(p.newUnlockMs)}"
+            else -> p.type
+        }
+        val status = if (now < p.readyAt()) {
+            "Ready in ${Ui.duration(p.readyAt() - now)}"
+        } else {
+            "Ready. Confirm within ${Ui.duration(p.expiresAt() - now)}"
+        }
+        return "$what\n$status"
+    }
+
+    private fun renderPending() {
+        val list = LockManager.allPending(this)
+        val key = list.joinToString(",") { "${it.type}@${it.since}" }
+        if (key != pendingKey) {
+            pendingKey = key
+            pendingBox.removeAllViews()
+            pendingTexts.clear()
+            list.forEachIndexed { i, p ->
+                val card = Ui.card(this)
+                val tv = Ui.text(this, "", 14f, Ui.TEXT)
+                card.addView(tv)
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                row.addView(
+                    Ui.button(this, "Confirm", Ui.Style.PRIMARY) { onConfirm(p.type) },
+                    Ui.lpWeight(this, 0, 6)
+                )
+                row.addView(
+                    Ui.button(this, "Cancel", Ui.Style.SECONDARY) { onCancel(p.type) },
+                    Ui.lpWeight(this, 6, 0)
+                )
+                card.addView(row, Ui.lp(this, 12))
+                pendingBox.addView(card, Ui.lp(this, if (i == 0) 0 else 8))
+                pendingTexts[p.type] = tv
+            }
+        }
+        val now = System.currentTimeMillis()
+        list.forEach { p -> pendingTexts[p.type]?.text = describe(p, now) }
+        pendingBox.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
+    }
+
     private fun refresh() {
         val on = Config.isEnabled(this)
         val vpn = DnsVpnService.running
@@ -346,20 +504,27 @@ class MainActivity : Activity() {
             lastOn = on
         }
 
-        val p = LockManager.pending(this)
-        if (p == null) {
-            pendingCard.visibility = View.GONE
-        } else {
-            val now = System.currentTimeMillis()
-            val what = if (p.type == "disable") "Turn protection off" else "Remove items from the lists"
-            pendingText.text = if (now < p.readyAt()) {
-                "$what\nAvailable in ${(p.readyAt() - now) / 1000 + 1}s"
-            } else {
-                "$what\nReady. Confirm within ${(p.expiresAt() - now) / 1000}s"
-            }
-            pendingCard.visibility = View.VISIBLE
+        // Uninstall lock
+        val unlocked = LockManager.isUnlocked(this)
+        unlockState.text = if (unlocked) "Unlocked" else "Locked"
+        unlockState.setTextColor(if (unlocked) Ui.WARN else Ui.ACCENT)
+        unlockSub.text = when {
+            unlocked && admin ->
+                "${Ui.duration(LockManager.unlockLeftMs(this))} left. Deactivate device admin first, then uninstall."
+            unlocked -> "${Ui.duration(LockManager.unlockLeftMs(this))} left. Uninstall is allowed."
+            !a11y -> "Not enforced: turn on the accessibility service."
+            else -> "Uninstalling or switching off the blocker is blocked."
+        }
+        if (lastUnlocked != unlocked) {
+            unlockBtn.text = if (unlocked) "Lock again now" else "Request uninstall unlock"
+            Ui.applyStyle(this, unlockBtn, if (unlocked) Ui.Style.PRIMARY else Ui.Style.SECONDARY)
+            lastUnlocked = unlocked
         }
 
+        delayValue.text = Ui.duration(Config.delayMs(this))
+        windowValue.text = Ui.duration(Config.unlockMs(this))
+
+        renderPending()
         renderApps()
     }
 
