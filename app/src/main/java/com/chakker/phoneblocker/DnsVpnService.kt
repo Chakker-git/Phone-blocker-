@@ -9,6 +9,9 @@ import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
+import android.system.StructPollfd
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -67,6 +70,9 @@ class DnsVpnService : VpnService() {
     }
 
     private var tun: ParcelFileDescriptor? = null
+
+    @Volatile
+    private var stopping = false
     private val pool: ExecutorService = Executors.newCachedThreadPool()
 
     override fun onCreate() {
@@ -76,6 +82,7 @@ class DnsVpnService : VpnService() {
 
     /** Close the tunnel and stop, so the VPN key icon and DNS filtering go away. */
     fun shutdown() {
+        stopping = true
         running = false
         try {
             tun?.close()
@@ -127,6 +134,7 @@ class DnsVpnService : VpnService() {
             return
         }
         tun = pfd
+        stopping = false
         running = true
         Thread({ runLoop(pfd) }, "dns-loop").start()
     }
@@ -135,8 +143,16 @@ class DnsVpnService : VpnService() {
         val input = FileInputStream(pfd.fileDescriptor)
         val output = FileOutputStream(pfd.fileDescriptor)
         val buf = ByteArray(32767)
+        // A blocking read() would keep the tunnel alive after close(), so wait with poll() and a
+        // short timeout and check the stop flag between rounds.
+        val pfds = arrayOf(StructPollfd())
+        pfds[0].fd = pfd.fileDescriptor
+        pfds[0].events = OsConstants.POLLIN.toShort()
         try {
-            while (true) {
+            while (!stopping) {
+                pfds[0].revents = 0
+                val ready = Os.poll(pfds, 500)
+                if (ready <= 0) continue
                 val n = input.read(buf)
                 if (n < 0) break
                 if (n == 0) continue
