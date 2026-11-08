@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Ring and slash, kept inside the central 66dp safe zone -->
+    <path
+        android:pathData="M54,54m-21,0a21,21 0,1 1,42 0a21,21 0,1 1,-42 0"
+        android:strokeColor="#8FBFAE"
+        android:strokeWidth="5"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M39.2,68.8L68.8,39.2"
+        android:strokeColor="#8FBFAE"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+</vector>

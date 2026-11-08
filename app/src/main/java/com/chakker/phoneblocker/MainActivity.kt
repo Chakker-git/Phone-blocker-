@@ -44,6 +44,8 @@ class MainActivity : Activity() {
     private lateinit var windowValue: TextView
     private lateinit var appsBox: LinearLayout
     private lateinit var domEdit: EditText
+    private lateinit var schedBox: LinearLayout
+    private var schedKey: String? = null
 
     private var appsKey: String? = null
     private var lastOn: Boolean? = null
@@ -159,6 +161,15 @@ class MainActivity : Activity() {
             Ui.lp(this, 8)
         )
 
+        // Schedules
+        root.addView(Ui.label(this, "Schedules"), Ui.lp(this, 28))
+        schedBox = Ui.card(this)
+        root.addView(schedBox, Ui.lp(this, 8))
+        root.addView(
+            Ui.button(this, "Add schedule", Ui.Style.SECONDARY) { openSchedule("") },
+            Ui.lp(this, 8)
+        )
+
         val scroll = ScrollView(this)
         scroll.setBackgroundColor(Ui.BG)
         scroll.addView(root)
@@ -170,6 +181,7 @@ class MainActivity : Activity() {
         super.onResume()
         // Device admin is on: the setup grace has done its job, close it.
         if (isAdminOn() && Config.graceUntil(this) > 0L) Config.setGraceUntil(this, 0L)
+        schedKey = null
         DnsVpnService.sync(this) // also tears down a tunnel left over while protection is off
         handler.post(ticker)
     }
@@ -273,6 +285,53 @@ class MainActivity : Activity() {
             }
         }
         refresh()
+    }
+
+    private fun openSchedule(id: String) {
+        val i = Intent(this, ScheduleEditActivity::class.java)
+        i.putExtra(ScheduleEditActivity.EXTRA_ID, id)
+        startActivity(i)
+    }
+
+    private fun renderSchedules() {
+        val list = LockManager.effectiveSchedules(this)
+        val active = list.filter { Schedules.isActiveNow(this, it) }.map { it.id }.toSet()
+        val key = Schedules.toJson(list) + active.joinToString(",")
+        if (key == schedKey) return
+        schedKey = key
+
+        schedBox.removeAllViews()
+        if (list.isEmpty()) {
+            schedBox.addView(Ui.text(this, "No schedules.", 14f, Ui.MUTED))
+            return
+        }
+        val pm = packageManager
+        list.forEachIndexed { i, s ->
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.VERTICAL
+            row.setOnClickListener { openSchedule(s.id) }
+            val isOn = s.id in active
+            row.addView(
+                Ui.text(
+                    this,
+                    "${Schedules.daysLabel(s.days)}  ${Schedules.rangeLabel(s)}" + if (isOn) "  (active)" else "",
+                    15f,
+                    if (isOn) Ui.ACCENT else Ui.TEXT
+                )
+            )
+            val names = s.packages.map { pkg ->
+                try {
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                } catch (e: Exception) {
+                    pkg
+                }
+            }
+            val sites = if (s.domains.isEmpty()) "" else "${s.domains.size} site" + if (s.domains.size == 1) "" else "s"
+            row.addView(
+                Ui.text(this, (names + listOf(sites)).filter { it.isNotEmpty() }.joinToString(", "), 12f, Ui.MUTED)
+            )
+            schedBox.addView(row, Ui.lp(this, if (i == 0) 0 else 14))
+        }
     }
 
     private fun openPicker() {
@@ -440,6 +499,7 @@ class MainActivity : Activity() {
             LockManager.TYPE_TIMING ->
                 "Change timing: delay ${Ui.duration(p.newDelayMs)}, window ${Ui.duration(p.newUnlockMs)}"
             LockManager.TYPE_UNINSTALL -> "Unlock uninstall for ${Ui.duration(p.newUnlockMs)}"
+            LockManager.TYPE_SCHEDULES -> "Change schedules (blocks less than before)"
             else -> p.type
         }
         val status = if (now < p.readyAt()) {
@@ -526,6 +586,7 @@ class MainActivity : Activity() {
 
         renderPending()
         renderApps()
+        renderSchedules()
     }
 
     private fun toast(msg: String) {

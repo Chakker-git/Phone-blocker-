@@ -23,9 +23,28 @@ class AppBlockerService : AccessibilityService() {
     private var lastBlockAt = 0L
     private var appLabel = "Phone Blocker"
 
+    // Catches a schedule that starts while its app is already on screen (no window event fires then).
+    private val scheduleTicker = object : Runnable {
+        override fun run() {
+            val scheduled = Schedules.activePackages(this@AppBlockerService)
+            if (scheduled.isNotEmpty()) {
+                val pkg = rootInActiveWindow?.packageName?.toString()
+                if (pkg != null && pkg in scheduled) block("Blocked.", "Scheduled block. Go do something else.")
+            }
+            handler.postDelayed(this, 20_000)
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         appLabel = applicationInfo.loadLabel(packageManager).toString()
+        handler.removeCallbacks(scheduleTicker)
+        handler.postDelayed(scheduleTicker, 20_000)
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -33,12 +52,11 @@ class AppBlockerService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
 
-        if (Config.isEnabled(this)) {
-            DnsVpnService.ensureRunning(this)
-            if (pkg in Config.packages(this)) {
-                block("Blocked.", "Go do something else.")
-                return
-            }
+        DnsVpnService.ensureRunning(this) // no-op unless protection is on or a schedule has sites
+        val alwaysOn = Config.isEnabled(this) && pkg in Config.packages(this)
+        if (alwaysOn || pkg in Schedules.activePackages(this)) {
+            block("Blocked.", "Go do something else.")
+            return
         }
 
         val cls = event.className?.toString() ?: ""

@@ -48,7 +48,7 @@ class DnsVpnService : VpnService() {
 
         /** Make the service state match the saved on/off flag. */
         fun sync(ctx: Context) {
-            if (Config.isEnabled(ctx)) {
+            if (Config.vpnWanted(ctx)) {
                 ensureRunning(ctx)
             } else {
                 // stopService alone isn't enough: the system keeps a VpnService bound while its
@@ -59,7 +59,7 @@ class DnsVpnService : VpnService() {
         }
 
         fun ensureRunning(ctx: Context) {
-            if (running || !Config.isEnabled(ctx)) return
+            if (running || !Config.vpnWanted(ctx)) return
             if (VpnService.prepare(ctx) != null) return // VPN permission not granted yet
             try {
                 ctx.startForegroundService(Intent(ctx, DnsVpnService::class.java))
@@ -96,7 +96,7 @@ class DnsVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         showForeground()
-        if (!Config.isEnabled(this)) {
+        if (!Config.vpnWanted(this)) {
             shutdown()
             return START_NOT_STICKY
         }
@@ -180,7 +180,7 @@ class DnsVpnService : VpnService() {
             val query = p.copyOfRange(dnsOff, dnsOff + dnsLen)
 
             val q = parseQuestion(query)
-            val reply: ByteArray = if (q != null && Config.isEnabled(this) && isBlocked(q.first)) {
+            val reply: ByteArray = if (q != null && isBlocked(q.first)) {
                 nxdomain(query, q.second)
             } else {
                 forward(query) ?: return
@@ -194,8 +194,17 @@ class DnsVpnService : VpnService() {
         }
     }
 
-    private fun isBlocked(name: String): Boolean =
-        Config.blockedDomains(this).any { name == it || name.endsWith(".$it") }
+    /** Always-on list while protection is on, plus the sites of any schedule that is active right now. */
+    private fun isBlocked(name: String): Boolean {
+        val list = ArrayList<String>()
+        if (Config.isEnabled(this)) list += Config.blockedDomains(this)
+        val scheduled = Schedules.activeDomains(this)
+        if (scheduled.isNotEmpty()) {
+            list += scheduled
+            list += Config.DOH_DOMAINS // keep secure-DNS providers out of reach during a schedule too
+        }
+        return list.any { name == it || name.endsWith(".$it") }
+    }
 
     /** Returns (lowercased query name, offset just past the question section), or null. */
     private fun parseQuestion(dns: ByteArray): Pair<String, Int>? {

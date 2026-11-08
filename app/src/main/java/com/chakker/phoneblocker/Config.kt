@@ -45,6 +45,9 @@ object Config {
 
     fun isEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(K_ENABLED, false)
 
+    /** The DNS filter has to run if protection is on, or if any schedule has sites to block. */
+    fun vpnWanted(ctx: Context): Boolean = isEnabled(ctx) || Schedules.hasDomains(ctx)
+
     fun setEnabled(ctx: Context, enabled: Boolean) {
         prefs(ctx).edit().putBoolean(K_ENABLED, enabled).apply()
     }

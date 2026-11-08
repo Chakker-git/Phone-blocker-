@@ -11,6 +11,8 @@ Personal Android blocker for apps and websites (incognito included), with reques
 - Timing: request delay (default 1 minute, for testing) and unlock window (default 10 minutes), both adjustable under Timing. Each request remembers the delay it was made under, so changing the setting can't shorten a request already waiting.
 - Device admin makes uninstalling a two-step chore. Boot receiver and the accessibility watchdog restart the VPN if it dies.
 
+- Schedules: separate from the always-on lists and independent of the protection switch. Each schedule has apps, sites, weekdays and a start/end time (end before start wraps past midnight, same start and end means all day). A schedule only blocks while its window is open. Adding or widening one applies at once; deleting one, removing an app or site, dropping a day or shortening the hours is a loosening change and goes through the request delay. Scheduled sites need the VPN, so the app asks for VPN consent the first time. A schedule that starts while its app is already open kicks in within about 20 seconds.
+
 Defaults: Reddit and Discord (apps and domains). Pick apps from a searchable list of installed apps ("Choose apps"); edit blocked sites as plain text. Removals from either list go through the delay.
 
 ## Build and install
@@ -34,6 +36,7 @@ CLI builds need the wrapper jar: run `gradle wrapper --gradle-version 8.7` once.
 
 ## Known gaps
 
+- Schedules use the phone's local time zone, so changing the time zone moves a window. Only the clock itself is tamper-resistant.
 - Mobile data and other VPN apps: Android allows only one active VPN, so starting another VPN kicks this one off (the watchdog can't restart it without your consent).
 - Clock: delays run on a monotonic clock (`Clock.kt`), so changing the system time does nothing. Only setting the clock forward while the phone is powered off, then booting, can still shorten a delay.
 - The uninstall guard is text matching on the screen, so it depends on OEM screens and language. It looks for the app name "Phone Blocker" on Settings, installer and VPN-dialog packages. Test it on the real phone. It also means Settings pages that mention the app (including the whole Accessibility list) are off limits while locked.
@@ -44,4 +47,3 @@ CLI builds need the wrapper jar: run `gradle wrapper --gradle-version 8.7` once.
 
 ## Next steps
 
-- Block windows (schedules) instead of always-on.

@@ -16,6 +16,8 @@ import org.json.JSONObject
  *  - config:    remove apps or sites from the blocklists
  *  - timing:    shorten the delay or lengthen the unlock window
  *  - uninstall: open the uninstall guard for the unlock window
+ *  - schedules: any schedule change that blocks less than before (delete, remove an app or site,
+ *               fewer days, a shorter time range). Adding or widening applies at once.
  */
 object LockManager {
     /** How long after a request becomes ready it can still be confirmed before it lapses. */
@@ -25,7 +27,8 @@ object LockManager {
     const val TYPE_CONFIG = "config"
     const val TYPE_TIMING = "timing"
     const val TYPE_UNINSTALL = "uninstall"
-    private val TYPES = listOf(TYPE_DISABLE, TYPE_CONFIG, TYPE_TIMING, TYPE_UNINSTALL)
+    const val TYPE_SCHEDULES = "schedules"
+    private val TYPES = listOf(TYPE_DISABLE, TYPE_CONFIG, TYPE_TIMING, TYPE_UNINSTALL, TYPE_SCHEDULES)
 
     enum class RequestResult { APPLIED, QUEUED, NOOP }
     enum class ConfirmResult { OK, TOO_EARLY, NONE }
@@ -39,6 +42,7 @@ object LockManager {
         val domains: List<String>,
         val newDelayMs: Long,
         val newUnlockMs: Long,
+        val schedules: List<Schedule>? = null,
     ) {
         fun readyAt(): Long = since + delayMs
         fun expiresAt(): Long = readyAt() + CONFIRM_MS
@@ -79,6 +83,10 @@ object LockManager {
         val p = pending(ctx, TYPE_CONFIG)
         return p?.domains ?: Config.userDomains(ctx)
     }
+
+    /** The schedules as the user last set them: the queued version if one is waiting, else the active one. */
+    fun effectiveSchedules(ctx: Context): List<Schedule> =
+        pending(ctx, TYPE_SCHEDULES)?.schedules ?: Schedules.load(ctx)
 
     // ---- uninstall unlock state ----
 
@@ -148,6 +156,21 @@ object LockManager {
         return RequestResult.QUEUED
     }
 
+    fun requestSchedules(ctx: Context, list: List<Schedule>): RequestResult {
+        val cur = Schedules.load(ctx)
+        if (list == cur) {
+            cancel(ctx, TYPE_SCHEDULES)
+            return RequestResult.NOOP
+        }
+        if (!Schedules.loosens(cur, list)) {
+            Schedules.save(ctx, list)
+            cancel(ctx, TYPE_SCHEDULES)
+            return RequestResult.APPLIED
+        }
+        queue(ctx, TYPE_SCHEDULES, schedules = list)
+        return RequestResult.QUEUED
+    }
+
     fun requestUninstallUnlock(ctx: Context): RequestResult {
         if (isUnlocked(ctx) || pending(ctx, TYPE_UNINSTALL) != null) return RequestResult.NOOP
         // The window length is fixed at request time, so changing the setting later can't stretch it.
@@ -167,6 +190,7 @@ object LockManager {
                 Config.setUnlockMs(ctx, p.newUnlockMs)
             }
             TYPE_UNINSTALL -> Config.setUnlockUntil(ctx, now + p.newUnlockMs)
+            TYPE_SCHEDULES -> Schedules.save(ctx, p.schedules ?: emptyList())
         }
         cancel(ctx, type)
         return ConfirmResult.OK
@@ -183,6 +207,7 @@ object LockManager {
         domains: List<String> = emptyList(),
         newDelayMs: Long = 0L,
         newUnlockMs: Long = 0L,
+        schedules: List<Schedule>? = null,
     ) {
         val p = Pending(
             type = type,
@@ -192,6 +217,7 @@ object LockManager {
             domains = domains,
             newDelayMs = newDelayMs,
             newUnlockMs = newUnlockMs,
+            schedules = schedules,
         )
         val o = JSONObject()
         o.put("type", p.type)
@@ -201,6 +227,7 @@ object LockManager {
         o.put("domains", JSONArray(p.domains))
         o.put("newDelay", p.newDelayMs)
         o.put("newUnlock", p.newUnlockMs)
+        p.schedules?.let { o.put("schedules", Schedules.toJson(it)) }
         Config.prefs(ctx).edit().putString(key(type), o.toString()).apply()
     }
 
@@ -214,6 +241,7 @@ object LockManager {
             domains = strings(o.optJSONArray("domains")),
             newDelayMs = o.optLong("newDelay", 0L),
             newUnlockMs = o.optLong("newUnlock", 0L),
+            schedules = o.optString("schedules", "").takeIf { it.isNotEmpty() }?.let { Schedules.fromJson(it) },
         )
     }
 
