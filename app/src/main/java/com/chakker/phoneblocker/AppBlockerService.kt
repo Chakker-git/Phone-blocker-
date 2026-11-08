@@ -22,6 +22,10 @@ class AppBlockerService : AccessibilityService() {
     private var lastBlockAt = 0L
     private var appLabel = "Phone Blocker"
 
+    // Labels of the other installed apps, used to tell "a list of apps" from "this app's own page".
+    private var otherLabels: Set<String> = emptySet()
+    private var otherLabelsAt = 0L
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         appLabel = applicationInfo.loadLabel(packageManager).toString()
@@ -70,40 +74,66 @@ class AppBlockerService : AccessibilityService() {
         val pkg = root.packageName?.toString() ?: return
         if (!isGuarded(pkg)) return
 
+        val texts = ArrayList<String>()
+        collectTexts(root, 0, IntArray(1), texts)
+
         val hit = when {
             // Only the "manage / disconnect" dialog, not the one that asks permission to start the VPN.
             pkg.contains("vpndialogs") ->
-                eventClass.contains("ManageDialog") && scan(root, 0, IntArray(1), exact = false)
+                eventClass.contains("ManageDialog") && texts.any { mentions(it) }
             // The uninstall dialog is only ever about one app, so a mention is enough.
-            pkg.contains("packageinstaller") -> scan(root, 0, IntArray(1), exact = false)
-            // Settings: only a row or title that is exactly the app name, not a summary that mentions it.
-            else -> scan(root, 0, IntArray(1), exact = true)
+            pkg.contains("packageinstaller") -> texts.any { mentions(it) }
+            else -> isOwnSettingsPage(texts)
         }
         if (hit) {
             block("Locked.", "Request an uninstall unlock in Phone Blocker to change or remove it.")
         }
     }
 
-    private fun matches(s: CharSequence?, exact: Boolean): Boolean {
-        if (s == null) return false
-        return if (exact) {
-            s.toString().trim().equals(appLabel, ignoreCase = true)
-        } else {
-            s.contains(appLabel, ignoreCase = true)
-        }
+    private fun mentions(s: String): Boolean = s.contains(appLabel, ignoreCase = true)
+
+    /**
+     * A Settings page counts as "about this app" when the app name shows up as a row or title
+     * on its own, and the screen is not a long list of other apps (Apps, notification app list...).
+     * Tapping the app's row in such a list opens its own page, which passes this test and is guarded.
+     */
+    private fun isOwnSettingsPage(texts: List<String>): Boolean {
+        if (texts.none { it.trim().equals(appLabel, ignoreCase = true) }) return false
+        val others = otherAppLabels()
+        val otherRows = texts.map { it.trim().lowercase() }.filter { it in others }.toSet().size
+        return otherRows < 3
     }
 
-    private fun scan(node: AccessibilityNodeInfo?, depth: Int, budget: IntArray, exact: Boolean): Boolean {
-        if (node == null || depth > 30) return false
-        budget[0]++
-        if (budget[0] > 600) return false
+    private fun otherAppLabels(): Set<String> {
+        val now = SystemClock.elapsedRealtime()
+        if (otherLabels.isNotEmpty() && now - otherLabelsAt < 10 * 60_000L) return otherLabels
+        val pm = packageManager
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        otherLabels = pm.queryIntentActivities(launcher, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .map { it.loadLabel(pm).toString().trim().lowercase() }
+            .filter { it.length >= 3 }
+            .toSet()
+        otherLabelsAt = now
+        return otherLabels
+    }
 
-        if (matches(node.text, exact) || matches(node.contentDescription, exact)) return true
+    private fun collectTexts(
+        node: AccessibilityNodeInfo?,
+        depth: Int,
+        budget: IntArray,
+        out: MutableList<String>
+    ) {
+        if (node == null || depth > 30) return
+        budget[0]++
+        if (budget[0] > 800) return
+
+        node.text?.let { out.add(it.toString()) }
+        node.contentDescription?.let { out.add(it.toString()) }
 
         for (i in 0 until node.childCount) {
-            if (scan(node.getChild(i), depth + 1, budget, exact)) return true
+            collectTexts(node.getChild(i), depth + 1, budget, out)
         }
-        return false
     }
 
     private fun block(title: String, message: String) {
