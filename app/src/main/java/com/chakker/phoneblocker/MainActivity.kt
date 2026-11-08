@@ -248,7 +248,7 @@ class MainActivity : Activity() {
             return
         }
         // The guard would otherwise bounce the activation screen, so give setup a short grace.
-        Config.setGraceUntil(this, System.currentTimeMillis() + SETUP_GRACE_MS)
+        Config.setGraceUntil(this, Clock.now(this) + SETUP_GRACE_MS)
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
         intent.putExtra(
             DevicePolicyManager.EXTRA_DEVICE_ADMIN,
@@ -313,7 +313,7 @@ class MainActivity : Activity() {
                 }
             }
             LockManager.ConfirmResult.TOO_EARLY -> {
-                val left = (pending?.readyAt() ?: 0L) - System.currentTimeMillis()
+                val left = (pending?.readyAt() ?: 0L) - Clock.now(this)
                 toast("Not yet. ${Ui.duration(left)} to go.")
             }
             LockManager.ConfirmResult.NONE -> toast("Nothing pending.")
@@ -476,7 +476,7 @@ class MainActivity : Activity() {
                 pendingTexts[p.type] = tv
             }
         }
-        val now = System.currentTimeMillis()
+        val now = Clock.now(this)
         list.forEach { p -> pendingTexts[p.type]?.text = describe(p, now) }
         pendingBox.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
     }

@@ -35,7 +35,7 @@ CLI builds need the wrapper jar: run `gradle wrapper --gradle-version 8.7` once.
 ## Known gaps
 
 - Mobile data and other VPN apps: Android allows only one active VPN, so starting another VPN kicks this one off (the watchdog can't restart it without your consent).
-- Clock: delays use wall-clock time, so changing the system time shortcuts the locks.
+- Clock: delays run on a monotonic clock (`Clock.kt`), so changing the system time does nothing. Only setting the clock forward while the phone is powered off, then booting, can still shorten a delay.
 - The uninstall guard is text matching on the screen, so it depends on OEM screens and language. It looks for the app name "Phone Blocker" on Settings, installer and VPN-dialog packages. Test it on the real phone. It also means Settings pages that mention the app (including the whole Accessibility list) are off limits while locked.
 - Not covered: safe mode, factory reset, `adb uninstall`, force-stopping from a screen the guard misses. Turn USB debugging off when you're done developing.
 - Disabling the VPN from a notification shade on a skin the guard doesn't recognize. Always-on VPN with "Block connections without VPN" (system VPN settings) closes that hole at the cost of losing internet when the filter is off.
@@ -45,4 +45,3 @@ CLI builds need the wrapper jar: run `gradle wrapper --gradle-version 8.7` once.
 ## Next steps
 
 - Block windows (schedules) instead of always-on.
-- Clock-tamper resistance using elapsed-realtime plus boot count.

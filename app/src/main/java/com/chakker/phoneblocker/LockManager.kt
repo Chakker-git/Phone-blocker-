@@ -57,7 +57,7 @@ object LockManager {
             cancel(ctx, type)
             return null
         }
-        if (System.currentTimeMillis() > p.expiresAt()) {
+        if (Clock.now(ctx) > p.expiresAt()) {
             cancel(ctx, type)
             return null
         }
@@ -82,9 +82,9 @@ object LockManager {
 
     // ---- uninstall unlock state ----
 
-    fun isUnlocked(ctx: Context): Boolean = System.currentTimeMillis() < Config.unlockUntil(ctx)
+    fun isUnlocked(ctx: Context): Boolean = Clock.now(ctx) < Config.unlockUntil(ctx)
 
-    fun unlockLeftMs(ctx: Context): Long = maxOf(Config.unlockUntil(ctx) - System.currentTimeMillis(), 0L)
+    fun unlockLeftMs(ctx: Context): Long = maxOf(Config.unlockUntil(ctx) - Clock.now(ctx), 0L)
 
     fun lockNow(ctx: Context) {
         Config.setUnlockUntil(ctx, 0L)
@@ -93,7 +93,7 @@ object LockManager {
 
     /** True while the guard should let Settings, uninstall and VPN screens through. */
     fun isGuardOpen(ctx: Context): Boolean {
-        val now = System.currentTimeMillis()
+        val now = Clock.now(ctx)
         return now < Config.unlockUntil(ctx) || now < Config.graceUntil(ctx)
     }
 
@@ -157,7 +157,7 @@ object LockManager {
 
     fun confirm(ctx: Context, type: String): ConfirmResult {
         val p = pending(ctx, type) ?: return ConfirmResult.NONE
-        val now = System.currentTimeMillis()
+        val now = Clock.now(ctx)
         if (now < p.readyAt()) return ConfirmResult.TOO_EARLY
         when (p.type) {
             TYPE_DISABLE -> Config.setEnabled(ctx, false)
@@ -186,7 +186,7 @@ object LockManager {
     ) {
         val p = Pending(
             type = type,
-            since = System.currentTimeMillis(),
+            since = Clock.now(ctx),
             delayMs = Config.delayMs(ctx),
             packages = packages,
             domains = domains,
