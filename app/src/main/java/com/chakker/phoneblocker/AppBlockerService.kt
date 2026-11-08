@@ -73,7 +73,7 @@ class AppBlockerService : AccessibilityService() {
 
         val texts = ArrayList<String>()
         val titleHit = BooleanArray(1)
-        collectTexts(root, 0, IntArray(1), texts, false, titleHit)
+        collectTexts(root, 0, IntArray(1), texts, false, false, titleHit)
 
         val hit = when {
             // Only the "manage / disconnect" dialog, not the one that asks permission to start the VPN.
@@ -102,6 +102,7 @@ class AppBlockerService : AccessibilityService() {
         budget: IntArray,
         out: MutableList<String>,
         inList: Boolean,
+        inRow: Boolean,
         titleHit: BooleanArray
     ) {
         if (node == null || depth > 30) return
@@ -117,12 +118,12 @@ class AppBlockerService : AccessibilityService() {
         val exact = (t != null && t.trim().equals(appLabel, true)) ||
             (d != null && d.trim().equals(appLabel, true))
         if (exact) {
-            Log.d("PhoneBlocker", "label node id=$id cls=${node.className} inList=$inList")
+            Log.d("PhoneBlocker", "label node id=$id cls=${node.className} inList=$inList inRow=${inRow || node.isClickable}")
             // Rows in a list also have ids ending in "title" (android:id/title), so a title id only
             // counts for the known header ids, not for any row.
             val headerId = id.contains("entity_header", true) || id.contains("action_bar", true) ||
                 id.contains("toolbar", true) || id.contains("collapsing", true)
-            if (headerId || !inList) titleHit[0] = true
+            if (headerId || !(inRow || node.isClickable)) titleHit[0] = true
         }
 
         val scrolls = inList || node.isScrollable ||
@@ -130,7 +131,7 @@ class AppBlockerService : AccessibilityService() {
                 it.contains("RecyclerView") || it.contains("ListView") || it.contains("ScrollView")
             } ?: false)
         for (i in 0 until node.childCount) {
-            collectTexts(node.getChild(i), depth + 1, budget, out, scrolls, titleHit)
+            collectTexts(node.getChild(i), depth + 1, budget, out, scrolls, inRow || node.isClickable, titleHit)
         }
     }
 
